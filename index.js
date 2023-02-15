@@ -6,11 +6,12 @@ const logger = require("koa-logger");
 const bodyParser = require("koa-bodyparser");
 const fs = require("fs");
 const path = require("path");
-const { init: initDB, Counter } = require("./db");
+const { init: initDB, Counter, Message } = require("./db");
 
 const router = new Router();
 
 const homePage = fs.readFileSync(path.join(__dirname, "index.html"), "utf-8");
+
 
 // 首页
 router.get("/", async (ctx) => {
@@ -22,20 +23,66 @@ const configuration = new Configuration({
 });
 const openai = new OpenAIApi(configuration);
 
-async function getAIResponse(prompt) {
-  const completion = await openai.createCompletion({
-    model: 'text-davinci-003',
-    prompt,
-    max_tokens: 1024,
-    temperature: 0.1,
-  });
-  return (completion?.data?.choices?.[0].text || 'AI 挂了').trim();
+async function getAIMessage(prompt,FromUserName) {
+
+// 找一下，是否已有记录
+const message = await Message.findOne({
+  where: {
+    fromUser: FromUserName,
+    request: Content,
+  },
+});
+
+// 已回答，直接返回消息
+if (message?.status === MESSAGE_STATUS_ANSWERED) {
+  return `[GPT]: ${message?.response}`;
 }
+
+// 在回答中
+if (message?.status === MESSAGE_STATUS_THINKING) {
+  return AI_THINKING_MESSAGE;
+}
+
+  // 因为AI响应比较慢，容易超时，先插入一条记录，维持状态，待后续更新记录。
+await Message.create({
+  fromUser: FromUserName,
+  response: '',
+  request: Content,
+  aiType: AI_TYPE_TEXT, // 为其他AI回复拓展，比如AI作画
+});
+
+const completion = await openai.createCompletion({
+  model: 'text-davinci-003',
+  prompt,
+  max_tokens: 1024,
+  temperature: 0.1,
+});
+
+// 成功后，更新记录
+await Message.update(
+  {
+    response:  (completion?.data?.choices?.[0].text || 'AI 挂了').trim(),
+    status: MESSAGE_STATUS_ANSWERED,
+  },
+  {
+    where: {
+      fromUser: FromUserName,
+      request: Content,
+    },
+  },
+);
+
+
+}
+
 
 router.post('/message/post', async ctx => {
   const { ToUserName, FromUserName, Content, CreateTime } = ctx.request.body;
-
-  const response = await getAIResponse(Content);
+  const message = await Promise.race([
+    // 3秒微信服务器就会超时，超过2.9秒要提示用户重试
+    sleep(2900).then(() => AI_THINKING_MESSAGE),
+    getAIMessage({ Content, FromUserName }),
+  ]);
   
   ctx.body = {
     ToUserName: FromUserName,
@@ -43,35 +90,7 @@ router.post('/message/post', async ctx => {
     CreateTime: +new Date(),
     MsgType: 'text',
     
-    Content: response,
-  };
-});
-
-// 更新计数
-router.post("/api/count", async (ctx) => {
-  const { request } = ctx;
-  const { action } = request.body;
-  if (action === "inc") {
-    await Counter.create();
-  } else if (action === "clear") {
-    await Counter.destroy({
-      truncate: true,
-    });
-  }
-
-  ctx.body = {
-    code: 0,
-    data: await Counter.count(),
-  };
-});
-
-// 获取计数
-router.get("/api/count", async (ctx) => {
-  const result = await Counter.count();
-
-  ctx.body = {
-    code: 0,
-    data: result,
+    Content: message,
   };
 });
 

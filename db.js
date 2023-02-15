@@ -20,13 +20,29 @@ const Counter = sequelize.define("Counter", {
   },
 });
 
+// 定义数据模型
+const Message = sequelize.define("Message", {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true
+  },
+    fromUser: DataTypes.STRING(64),
+    response: DataTypes.TEXT,
+    request: DataTypes.TEXT,
+    aiType: DataTypes.STRING(32), // 为其他AI回复拓展，比如AI作画
+});
+
+
 // 数据库初始化方法
 async function init() {
   await Counter.sync({ alter: true });
+  await Message.sync({ alter: true });
+
 }
 
 // 导出初始化方法和模型
 module.exports = {
   init,
   Counter,
+  Message
 };
